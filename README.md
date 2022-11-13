@@ -30,9 +30,11 @@ vagrant up workernode
 ```
 - on masternode run `cilium install`. Wait till its completion
 - as soon as it gets completed, the cluster is good to go.
+- if it fails for the first time, re run `cilium install`.
 
 ```
 # on masternode
 kubectl cluster-info
 kubectl get pods --all-namespaces
 ```
+![Fully setup](final.jpg)
