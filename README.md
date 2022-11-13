@@ -7,6 +7,7 @@
 4. Clone this repository
 
 ## Getting Started
+- For detailed Kubernetes setup click [here](https://sunnykkc13.medium.com/kubernetes-setup-489ecb64a896) 
 - Open the command line terminal then run
 ```
 vagrant up

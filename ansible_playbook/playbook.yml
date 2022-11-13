@@ -35,7 +35,16 @@
         - {cmd: "modprobe overlay"}
         - {cmd: "modprobe br_netfilter"}
         - {cmd: "sysctl --system"}
-      tags: 
+      tags:
+        - required
+        - swap
+    - name: permanent disable swap /etc/fstab
+      replace:
+        path: /etc/fstab
+        regexp: '/swapfile'
+        replace: '#/swapfile'
+      become: yes
+      tags:
         - required
         - swap
 

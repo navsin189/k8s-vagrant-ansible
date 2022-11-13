@@ -4,8 +4,8 @@ servers=[
     :ip => "192.168.50.4",
     :box => "rockylinux/8",
     :version => "4.0.0",
-    :ram => "2524",
-    :cpu => "2",
+    :ram => 2524,
+    :cpu => 2,
     :role => "master"
   },
   {
@@ -13,8 +13,8 @@ servers=[
     :ip => "192.168.50.9",
     :box => "rockylinux/8",
     :version => "4.0.0",
-    :ram => "1048",
-    :cpu => "1",
+    :ram => 1048,
+    :cpu => 1,
     :role => "worker"
   }
 ]
@@ -27,11 +27,11 @@ Vagrant.configure("2") do |config|
       subconfig.vm.hostname = machine[:hostname] 
       subconfig.vm.network "public_network"
       subconfig.vm.network "private_network" ,ip: machine[:ip]
-      subconfig.vm.provider machine[:hostname] do |vb|
-        vb.memory = machine[:ram]
-        vb.cpus = machine[:cpu]
-      end
     end 
+    config.vm.provider "#{machine[:hostname]}1" do |vb|
+      vb.memory = machine[:ram]
+      vb.cpus = machine[:cpu]
+    end
     config.vm.provision "ansible_local" do |ansible|
       ansible.playbook = "ansible_playbook/playbook.yml"
       ansible.extra_vars ={
