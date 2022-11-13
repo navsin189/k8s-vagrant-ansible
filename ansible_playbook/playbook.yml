@@ -1,0 +1,314 @@
+- hosts: "{{ host }}"
+  become: yes
+  vars:
+    - role: "{{ node }}"
+    - host: "{{ hostname }}"
+    - ip: "{{ ip }}"
+  tasks:
+    - name: set selinux to permissive
+      ansible.posix.selinux:
+        policy: targeted
+        state: permissive
+      become: yes
+      ignore_errors: yes
+      tags: 
+        - required
+        - selinux
+    - name: create tee /etc/sysctl.d/k8s.conf
+      blockinfile:
+        create: yes
+        path: /etc/sysctl.d/k8s.conf
+        block: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+      become: yes
+      tags: 
+        - required
+        - ip_bridging
+
+    - name: disable swap and enable kernel module
+      command: "{{ item.cmd }}"
+      become: yes
+      loop:
+        - {cmd: "swapoff -a"}
+        - {cmd: "modprobe overlay"}
+        - {cmd: "modprobe br_netfilter"}
+        - {cmd: "sysctl --system"}
+      tags: 
+        - required
+        - swap
+
+    - name: create /etc/modules-load.d/k8s.conf
+      blockinfile:
+        create: yes
+        path: /etc/modules-load.d/k8s.conf
+        block: |
+          overlay
+          br_netfilter
+      become: yes
+      tags: 
+        - required
+        - k8s
+
+    - name: download docker repo
+      get_url: 
+        url: https://download.docker.com/linux/centos/docker-ce.repo
+        dest: /etc/yum.repos.d/docker-ce.repo
+      become: yes
+    - name: install containerd CRI
+      package:
+        name: containerd
+        state: present
+      become: yes
+      tags: 
+        - required
+        - docker
+        - k8s
+
+    - name: reset containerd config files
+      shell: 'containerd config default > /etc/containerd/config.toml'
+      become: yes
+      tags: 
+        - required
+        - docker
+        - k8s
+
+    - name: set SystemCgroup true in containerd config file
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+      become: yes
+      tags: 
+        - required
+        - docker
+        - k8s
+        - config
+
+    - name: restart CONTAINERD
+      service: 
+        name: containerd
+        state: restarted
+        enabled: yes
+      become: yes
+      tags: 
+        - required
+        - docker
+        - k8s
+
+    - name: copy repo to /etc/yum.repos.d/kubernetes.repo
+      copy:
+        src: /vagrant/kubernetes.repo
+        dest: /etc/yum.repos.d/kubernetes.repo
+        mode: '0644'
+      become: yes
+      tags: 
+        - required
+        - k8s
+
+    - name: install kubectl kubelet kubeadm
+      dnf:
+        name:
+          - kubectl
+          - kubelet
+          - kubeadm
+        disable_excludes: kubernetes
+        enablerepo: kubernetes
+        state: present
+      become: yes
+      ignore_errors: yes
+      tags: 
+        - required
+        - k8s
+
+    - name: enable and start kubelet
+      service: 
+        name: kubelet
+        state: started
+        enabled: yes
+      ignore_errors: yes
+      become: yes
+      tags: 
+        - required
+        - k8s
+
+    - name: update /etc/hosts file for nodes
+      blockinfile:
+        path: /etc/hosts
+        block: |
+          192.168.50.4 masternode
+          192.168.50.9 workernode
+      become: yes
+      tags: 
+        - required
+        - dns
+
+    - name: update firewall rule for control node
+      ansible.posix.firewalld:
+        port: "{{ item.port }}"
+        permanent: yes
+        state: enabled
+      loop: 
+        - {port: "6443/tcp"}
+        - {port: "2379-2380/tcp"}
+        - {port: "10250/tcp"}
+        - {port: "10259/tcp"}
+        - {port: "10257/tcp"}
+      become: yes
+      when: role == "control" or role == "master"
+      tags:
+        - required
+        - firewall
+
+    - name: update firewall rule for worker node
+      ansible.posix.firewalld:
+        port: "{{ item.port }}"
+        permanent: yes
+        state: enabled
+      loop: 
+        - {port: "10250/tcp"}
+        - {port: "30000-32767/tcp"}
+      become: yes
+      when: role == "worker" or role == "slave"
+      tags:
+        - required
+        - firewall
+    
+    - name: restart firewall rule
+      service: 
+        name: firewalld
+        state: restarted
+      become: yes
+      tags:
+        - required
+        - firewall 
+
+    - name: reset kubeadm cluster if exists
+      command: "kubeadm reset -f"
+      become: yes
+      tags:
+        - required
+        - kubeadm
+
+    - name: initialize kubeadm cluster
+      command: "kubeadm init --apiserver-advertise-address={{ ip }}"
+      when: role == "control" or role == "master"
+      become: yes
+      tags:
+        - required
+        - kubeadm
+    
+    - name: create token on master node
+      command: kubeadm token generate
+      when: role == "control" or role == "master"
+      register: token
+      become: yes
+      tags:
+        - required
+        - kubeadm
+    
+    - name: check for token value
+      debug:
+        var: token.stdout
+      when: role == "control" or role == "master"
+      tags:
+        - required
+        - kubeadm
+        - debug
+
+    - name: Generate join command on master node
+      command: "kubeadm token create {{ token.stdout }} --print-join-command"
+      when: role == "control" or role == "master"
+      register: join_command
+      become: yes
+      tags:
+        - required
+        - kubeadm
+    
+    - name: create .kube directory
+      file:
+        path: "/home/vagrant/.kube"
+        state: directory
+      when: role == "control" or role == "master"
+      tags:
+        - required
+        - kubeadm
+    
+    - name: copy the admin.conf file to .kube
+      file:
+        path: /etc/kubernetes/admin.conf
+        mode: "0644"
+      when: role == "control" or role == "master"
+      become: yes
+      tags:
+        - required
+        - kubeadm
+
+    - name: copy the admin.conf file to .kube
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/vagrant/.kube/config
+        owner: vagrant
+        group: vagrant
+        mode: "0644"
+      when: role == "control" or role == "master"
+      become: yes
+      tags:
+        - required
+        - kubeadm
+
+    - name: download cilium as CNI
+      command: sh /vagrant/cilium.sh
+      when: role == "control" or role == "master"
+      tags:
+        - required
+        - kubeadm
+
+    - name: check for join_command value
+      debug:
+        var: join_command.stdout
+      when: role == "control" or role == "master"
+      tags:
+        - required
+        - kubeadm
+        - debug
+    - name: store the join command in a file
+      copy: 
+        content: "{{ join_command.stdout }}"
+        dest: /home/vagrant/cluster.sh
+        mode: "0755"
+      when: role == "control" or role == "master"
+      tags:
+        - required
+        - kubeadm
+
+    - name: Fetch the file from the mwiapp01 to master
+      run_once: yes
+      fetch: 
+        src: /home/vagrant/cluster.sh 
+        dest: buffer/ 
+        flat: yes
+      when: role == "control" or role == "master"
+      become: yes
+      tags:
+        - required
+        - kubeadm
+
+    - name: copy the cluster.sh file to worker nodes
+      copy:
+        src: buffer/cluster.sh
+        dest: /home/vagrant/cluster.sh
+      when: role == "worker" or role == "slave"
+      become: yes
+      tags:
+        - required
+        - kubeadm
+
+    - name: run join command on worker
+      command: "sh /home/vagrant/cluster.sh"
+      when: role == "worker" or role == "slave"
+      become: yes
+      tags:
+        - required
+        - kubeadm
